@@ -8,7 +8,7 @@
 class Inverter extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
-      { name: 'targetFreq',  defaultValue: 60,  minValue: 20,  maxValue: 200 },
+      { name: 'targetFreq',  defaultValue: 60,  minValue: 20,  maxValue: 500 },
       { name: 'phaseOffset', defaultValue: Math.PI,    // radians
         minValue: 0, maxValue: 2 * Math.PI },
       { name: 'gain',        defaultValue: 0.7, minValue: 0,   maxValue: 1 }
