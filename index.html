@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="manifest" href="manifest.json" />
+  <title>Hum Canceller</title>
+  <style>
+    body{font-family:sans-serif;margin:0;padding:2rem;background:#111;color:#eee}
+    h1{font-size:1.3rem;margin:0 0 1rem}
+    .ctrl{margin:1rem 0}
+    input[type=range]{width:100%}
+    label{display:flex;justify-content:space-between;font-size:.9rem}
+    .row{display:flex;align-items:center;gap:.6rem}
+    .row input[type=checkbox]{width:1.2rem;height:1.2rem}
+    button{padding:.5rem 1rem;font-size:1rem;border:none;border-radius:.4rem;
+           background:#0af;color:#000;cursor:pointer;width:100%;margin-top:1.5rem}
+  </style>
+</head>
+<body>
+  <h1>Night-stand Hum Canceller</h1>
+
+  <div class="ctrl">
+    <label>Freq (Hz) <span id="fVal">60</span></label>
+    <input id="freq" type="range" min="20" max="200" value="60" />
+  </div>
+  <div class="ctrl">
+    <label>Phase (°) <span id="pVal">180</span></label>
+    <input id="phase" type="range" min="0" max="360" value="180" />
+  </div>
+  <div class="ctrl">
+    <label>Gain <span id="gVal">0.7</span></label>
+    <input id="gain" type="range" min="0" max="1" step="0.01" value="0.7" />
+  </div>
+
+  <div class="row">
+    <input id="auto" type="checkbox">
+    <label for="auto" style="flex:1">Auto-Tune</label>
+  </div>
+
+  <button id="toggle">Start</button>
+
+  <script>
+    navigator.wakeLock?.request?.('screen').catch(()=>{});
+
+    const freq  = document.getElementById('freq');
+    const phase = document.getElementById('phase');
+    const gain  = document.getElementById('gain');
+    const auto  = document.getElementById('auto');
+    const fVal  = document.getElementById('fVal');
+    const pVal  = document.getElementById('pVal');
+    const gVal  = document.getElementById('gVal');
+
+    [freq, phase, gain].forEach(inp =>
+      inp.oninput = () => { fVal.textContent = freq.value;
+                            pVal.textContent = phase.value;
+                            gVal.textContent = gain.value; });
+
+    let ctx, inverter, analyser, running = false, tuneTimer;
+
+    document.getElementById('toggle').onclick = async () => {
+      if (running) { stopAll(); return; }
+
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mic    = ctx.createMediaStreamSource(stream);
+
+      await ctx.audioWorklet.addModule('inverter-processor.js');
+      inverter = new AudioWorkletNode(ctx, 'inverter');
+      inverter.connect(ctx.destination);
+
+      // bind sliders → parameters (phase slider sends radians)
+      const p = inverter.parameters;
+      const bind = (inp, param, tf = x => x) =>
+        inp.addEventListener('input',
+          () => param.setValueAtTime(tf(+inp.value), ctx.currentTime));
+      bind(freq , p.get('targetFreq'));
+      bind(gain , p.get('gain'));
+      bind(phase, p.get('phaseOffset'), deg => deg * Math.PI / 180);
+
+      // analyser for auto-tune
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      mic.connect(analyser);          // analyser only; mic not audible
+
+      running = true;
+      document.getElementById('toggle').textContent = 'Stop';
+
+      startAutoTune();                // start timer; honours checkbox state
+    };
+
+    function stopAll() {
+      clearInterval(tuneTimer);
+      ctx.close();
+      running = false;
+      document.getElementById('toggle').textContent = 'Start';
+    }
+
+    /* ---------- Auto-Tune ---------- */
+    function startAutoTune() {
+      const MIN = 20, MAX = 200;
+      const bins = analyser.frequencyBinCount;
+      const binHz = ctx.sampleRate / analyser.fftSize;
+      const startBin = Math.round(MIN / binHz);
+      const endBin   = Math.round(MAX / binHz);
+
+      const spectrum = new Float32Array(bins);
+
+      tuneTimer = setInterval(() => {
+        if (!auto.checked) return;              // user turned auto off
+
+        analyser.getFloatFrequencyData(spectrum);
+
+        // find loudest bin within band
+        let maxVal = -Infinity, maxBin = startBin;
+        for (let i = startBin; i <= endBin; i++) {
+          if (spectrum[i] > maxVal) { maxVal = spectrum[i]; maxBin = i; }
+        }
+        const detected = maxBin * binHz;
+
+        // smooth small jumps (±1 Hz) to avoid slider jitter
+        const curr = +freq.value;
+        const next = Math.abs(detected - curr) < 1 ? curr : detected.toFixed(1);
+
+        // update UI & inverter
+        freq.value = fVal.textContent = next;
+        inverter.parameters.get('targetFreq')
+               .setValueAtTime(+next, ctx.currentTime);
+      }, 500);   // every ½ second
+    }
+  </script>
+</body>
+</html>
